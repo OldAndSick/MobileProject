@@ -698,19 +698,11 @@ MonoBehaviour:
   m_GameObject: {fileID: 977702616}
   m_Enabled: 1
   m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: a0e9cea3239313e4391551a29767e116, type: 3}
+  m_Script: {fileID: 11500000, guid: 373bfa9c118e5a64aaea82a9745dba57, type: 3}
   m_Name: 
-  m_EditorClassIdentifier: Assembly-CSharp::GatePoolManager
-  gatePrefab: {fileID: 0}
-  poolSize: 10
-  spawnOffsetZ: 40
-  spawnInterval: 2.5
-  lanePositionsX:
-  - -1.75
-  - 1.75
-  operators: 2b002d002a002f00
-  valueMin: 2
-  valueMax: 20
+  m_EditorClassIdentifier: Assembly-CSharp::GateData
+  Operator: 43
+  Value: 10
 --- !u!1 &1599020463
 GameObject:
   m_ObjectHideFlags: 0
