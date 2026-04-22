@@ -242,6 +242,7 @@ GameObject:
   - component: {fileID: 97117983}
   - component: {fileID: 97117982}
   - component: {fileID: 97117981}
+  - component: {fileID: 97117984}
   m_Layer: 0
   m_Name: Main Camera
   m_TagString: MainCamera
@@ -323,6 +324,26 @@ Transform:
   m_Children: []
   m_Father: {fileID: 0}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+--- !u!114 &97117984
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 97117980}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: c14d6f589d1988f4f9e5fb7c1e7f40c0, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::CameraController
+  target: {fileID: 281598457}
+  runOffset: {x: 0, y: 4, z: -8}
+  runLookDownAngle: 15
+  flyOffset: {x: 0, y: 8, z: -18}
+  flyLookDownAngle: 20
+  positionSmoothTime: 0.15
+  offsetTransitionSpeed: 3
+  rotationSmoothTime: 0.1
 --- !u!1 &281598451
 GameObject:
   m_ObjectHideFlags: 0
@@ -361,11 +382,13 @@ MonoBehaviour:
   laneLimit: 3.5
   launchAngleDeg: 45
   launchForceBase: 5
+  launchForceMin: 10
   boostDrainPerSecond: 10
   thrustForce: 15
   airDrag: 1.5
   flightGravityScale: 0.6
   restoreGravityOnLand: 1
+  landingGracePeriod: 0.5
   boosterParticle: {fileID: 0}
 --- !u!54 &281598453
 Rigidbody:

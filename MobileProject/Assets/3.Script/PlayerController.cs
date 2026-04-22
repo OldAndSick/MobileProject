@@ -1,9 +1,5 @@
 using UnityEngine;
 
-/// <summary>
-/// Phase 1(Running) → Phase 2(Jumping) → Phase 3(Flying) 전 구간을 담당하는 플레이어 컨트롤러.
-/// Unity 6 대응 : velocity → linearVelocity / drag → linearDamping
-/// </summary>
 [RequireComponent(typeof(Rigidbody))]
 public class PlayerController : MonoBehaviour
 {
@@ -48,6 +44,9 @@ public class PlayerController : MonoBehaviour
     [Tooltip("비행 종료 시 원래 중력으로 복원할지 여부")]
     public bool restoreGravityOnLand = true;
 
+    [Tooltip("발사 후 이 시간(초) 동안은 착지 판정을 무시 (즉시 GameOver 방지)")]
+    public float landingGracePeriod = 0.5f;
+
     [Header("=== VFX ===")]
     [Tooltip("부스터 파티클 시스템 (차량 후방에 부착)")]
     public ParticleSystem boosterParticle;
@@ -60,7 +59,10 @@ public class PlayerController : MonoBehaviour
     private float _originalDrag;
     private float _startPosZ;
     private float _touchStartX;
-    private bool _launched;   // Launch 중복 호출 방지
+    private bool _launched;
+
+    // ★ 핵심 수정: 발사 직후 착지 판정을 막는 타이머
+    private float _landingGraceTimer;
 
     // ────────────────────────────────────────────────
     //  Unity 생명주기
@@ -70,16 +72,15 @@ public class PlayerController : MonoBehaviour
         _rb = GetComponent<Rigidbody>();
         _rb.isKinematic = true;
         _originalGravity = Physics.gravity;
-        _originalDrag = _rb.linearDamping;   // Unity 6
+        _originalDrag = _rb.linearDamping;
     }
 
     private void Start()
     {
-        // ★ OnEnable에서 하면 GameManager.Instance가 아직 null일 수 있으므로 Start에서 구독
         if (GameManager.Instance != null)
             GameManager.Instance.OnStateChanged += HandleStateChanged;
         else
-            Debug.LogError("[PlayerController] GameManager.Instance가 null입니다. 씬에 GameManager 오브젝트가 있는지 확인하세요.");
+            Debug.LogError("[PlayerController] GameManager.Instance가 null입니다.");
     }
 
     private void OnDisable()
@@ -88,9 +89,6 @@ public class PlayerController : MonoBehaviour
             GameManager.Instance.OnStateChanged -= HandleStateChanged;
     }
 
-    // ────────────────────────────────────────────────
-    //  Update – 상태 머신 분기
-    // ────────────────────────────────────────────────
     private void Update()
     {
         switch (GameManager.Instance.CurrentState)
@@ -101,6 +99,10 @@ public class PlayerController : MonoBehaviour
                 break;
 
             case GameManager.GameState.Flying:
+                // ★ 유예 타이머 카운트다운
+                if (_landingGraceTimer > 0f)
+                    _landingGraceTimer -= Time.deltaTime;
+
                 HandleFlyingInput();
                 CheckGroundFall();
                 break;
@@ -146,10 +148,7 @@ public class PlayerController : MonoBehaviour
     }
 
     // ────────────────────────────────────────────────
-    //  Phase 2 : 충돌 감지
-    //  ★ 큐브 점프대가 Is Trigger가 아닌 일반 Collider일 경우를 위해
-    //    OnCollisionEnter 폴백을 추가했습니다.
-    //    → 큐브 점프대에 Is Trigger 설정이 없어도 정상 작동합니다.
+    //  Phase 2 : 충돌 감지 (Trigger + Collision 둘 다)
     // ────────────────────────────────────────────────
     private void OnTriggerEnter(Collider other)
     {
@@ -180,9 +179,11 @@ public class PlayerController : MonoBehaviour
             return;
         }
 
+        // ★ 유예 시간 중에는 Ground 충돌 무시 (점프대 자체가 Ground로 판정되는 경우도 방지)
         if (otherTag == "Ground" && state == GameManager.GameState.Flying)
         {
-            Land();
+            if (_landingGraceTimer <= 0f)
+                Land();
         }
     }
 
@@ -191,18 +192,22 @@ public class PlayerController : MonoBehaviour
     // ────────────────────────────────────────────────
     private void Launch()
     {
-        if (_launched) return;   // 중복 호출 방지
+        if (_launched) return;
         _launched = true;
 
         GameManager.Instance.ChangeState(GameManager.GameState.Jumping);
 
         _rb.isKinematic = false;
-        _rb.linearVelocity = Vector3.zero;   // Unity 6
+
+        // ★ Running 구간에서 Transform.Translate로 달리던 속도를
+        //    Rigidbody 초기 velocity로 심어줌.
+        //    이게 없으면 물리 전환 시 앞으로 나가는 관성이 0이라
+        //    포물선이 아니라 수직으로 올라갔다가 바로 아래로 떨어짐.
+        _rb.linearVelocity = Vector3.forward * baseSpeed;
 
         float rad = launchAngleDeg * Mathf.Deg2Rad;
         Vector3 dir = new Vector3(0f, Mathf.Sin(rad), Mathf.Cos(rad)).normalized;
 
-        // boostGauge가 0이어도 launchForceMin 만큼은 발사 보장 (테스트 편의용)
         float forceMag = Mathf.Max(
             launchForceMin,
             GameManager.Instance.boostGauge
@@ -223,8 +228,11 @@ public class PlayerController : MonoBehaviour
     private void EnterFlyingMode()
     {
         _startPosZ = transform.position.z;
-        _rb.linearDamping = airDrag;                         // Unity 6
+        _rb.linearDamping = airDrag;
         Physics.gravity = _originalGravity * flightGravityScale;
+
+        // ★ 유예 타이머 시작 — 이 시간 동안 착지 판정 전부 무시
+        _landingGraceTimer = landingGracePeriod;
     }
 
     private void HandleFlyingInput()
@@ -248,6 +256,9 @@ public class PlayerController : MonoBehaviour
 
     private void CheckGroundFall()
     {
+        // ★ 유예 시간 중에는 Y=0 판정도 무시
+        if (_landingGraceTimer > 0f) return;
+
         if (transform.position.y <= 0f) Land();
     }
 
@@ -259,9 +270,9 @@ public class PlayerController : MonoBehaviour
         if (GameManager.Instance.CurrentState == GameManager.GameState.GameOver) return;
 
         StopBoosterParticle();
-        _rb.linearVelocity = Vector3.zero;   // Unity 6
+        _rb.linearVelocity = Vector3.zero;
         _rb.isKinematic = true;
-        _rb.linearDamping = _originalDrag;  // Unity 6
+        _rb.linearDamping = _originalDrag;
         if (restoreGravityOnLand) Physics.gravity = _originalGravity;
 
         float distance = transform.position.z - _startPosZ;
@@ -275,7 +286,7 @@ public class PlayerController : MonoBehaviour
     {
         if (newState == GameManager.GameState.GameOver)
         {
-            _rb.linearVelocity = Vector3.zero;   // Unity 6
+            _rb.linearVelocity = Vector3.zero;
             _rb.isKinematic = true;
         }
     }
