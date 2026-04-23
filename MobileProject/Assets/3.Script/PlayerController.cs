@@ -4,7 +4,7 @@ using UnityEngine;
 public class PlayerController : MonoBehaviour
 {
     // ────────────────────────────────────────────────
-    //  Inspector 노출 변수
+    //  Inspector
     // ────────────────────────────────────────────────
 
     [Header("=== Phase 1 : Running ===")]
@@ -47,12 +47,25 @@ public class PlayerController : MonoBehaviour
     [Tooltip("발사 후 이 시간(초) 동안은 착지 판정을 무시 (즉시 GameOver 방지)")]
     public float landingGracePeriod = 0.5f;
 
+    [Header("=== Obstacle (장애물) ===")]
+    [Tooltip("장애물 충돌 시 감소할 부스터 게이지량")]
+    public float obstacleDamage = 15f;
+
+    [Tooltip("장애물 충돌 시 뒤로 튕겨나는 넉백 힘")]
+    public float obstacleKnockback = 6f;
+
+    [Tooltip("같은 장애물에 연속 충돌 방지 쿨타임 (초)")]
+    public float obstacleCooldown = 0.5f;
+
+    [Tooltip("장애물 충돌 시 재생할 파티클 (없으면 무시)")]
+    public ParticleSystem hitParticle;
+
     [Header("=== VFX ===")]
     [Tooltip("부스터 파티클 시스템 (차량 후방에 부착)")]
     public ParticleSystem boosterParticle;
 
     // ────────────────────────────────────────────────
-    //  Private 변수
+    //  Private
     // ────────────────────────────────────────────────
     private Rigidbody _rb;
     private Vector3 _originalGravity;
@@ -60,9 +73,8 @@ public class PlayerController : MonoBehaviour
     private float _startPosZ;
     private float _touchStartX;
     private bool _launched;
-
-    // ★ 핵심 수정: 발사 직후 착지 판정을 막는 타이머
     private float _landingGraceTimer;
+    private float _obstacleHitTimer;   // 장애물 쿨타임 타이머
 
     // ────────────────────────────────────────────────
     //  Unity 생명주기
@@ -91,6 +103,9 @@ public class PlayerController : MonoBehaviour
 
     private void Update()
     {
+        // 쿨타임 카운트다운
+        if (_obstacleHitTimer > 0f) _obstacleHitTimer -= Time.deltaTime;
+
         switch (GameManager.Instance.CurrentState)
         {
             case GameManager.GameState.Running:
@@ -99,10 +114,7 @@ public class PlayerController : MonoBehaviour
                 break;
 
             case GameManager.GameState.Flying:
-                // ★ 유예 타이머 카운트다운
-                if (_landingGraceTimer > 0f)
-                    _landingGraceTimer -= Time.deltaTime;
-
+                if (_landingGraceTimer > 0f) _landingGraceTimer -= Time.deltaTime;
                 HandleFlyingInput();
                 CheckGroundFall();
                 break;
@@ -148,7 +160,7 @@ public class PlayerController : MonoBehaviour
     }
 
     // ────────────────────────────────────────────────
-    //  Phase 2 : 충돌 감지 (Trigger + Collision 둘 다)
+    //  충돌 감지 (Trigger + Collision 둘 다)
     // ────────────────────────────────────────────────
     private void OnTriggerEnter(Collider other)
     {
@@ -164,27 +176,82 @@ public class PlayerController : MonoBehaviour
     {
         var state = GameManager.Instance.CurrentState;
 
-        if (otherTag == "MathGate" && state == GameManager.GameState.Running)
+        switch (otherTag)
         {
-            GateData gate = other.GetComponent<GateData>();
-            if (gate != null)
-                GameManager.Instance.ApplyGateFormula(gate.Operator, gate.Value);
-            GatePoolManager.Instance?.ReturnGate(other);
-            return;
+            case "MathGate":
+                if (state != GameManager.GameState.Running) return;
+                GateData gate = other.GetComponent<GateData>();
+                if (gate != null)
+                    GameManager.Instance.ApplyGateFormula(gate.Operator, gate.Value);
+                // 청크 기반이므로 게이트는 풀 반환 없이 그냥 비활성화
+                other.SetActive(false);
+                break;
+
+            case "JumpRamp":
+                if (state != GameManager.GameState.Running) return;
+                Launch();
+                break;
+
+            case "Ground":
+                if (state != GameManager.GameState.Flying) return;
+                if (_landingGraceTimer <= 0f) Land();
+                break;
+
+            case "Obstacle":
+                // Running / Flying 양쪽 모두 장애물 피격 처리
+                if (state == GameManager.GameState.GameOver) return;
+                HandleObstacleHit(other);
+                break;
+        }
+    }
+
+    // ────────────────────────────────────────────────
+    //  장애물 피격
+    // ────────────────────────────────────────────────
+
+    /// <summary>
+    /// 장애물 충돌 시 호출.
+    /// Running : 부스터 게이지 감소 + 뒤로 넉백
+    /// Flying  : 부스터 게이지 감소 + 반대 방향 튕김
+    /// </summary>
+    private void HandleObstacleHit(GameObject obstacle)
+    {
+        // 쿨타임 중이면 무시 (같은 장애물에 여러 프레임 연속 충돌 방지)
+        if (_obstacleHitTimer > 0f) return;
+        _obstacleHitTimer = obstacleCooldown;
+
+        // 게이지 감소
+        GameManager.Instance.boostGauge =
+            Mathf.Max(0f, GameManager.Instance.boostGauge - obstacleDamage);
+        UIManager.Instance?.RefreshBoostGaugeUI(GameManager.Instance.boostGauge);
+
+        // 넉백 방향: 장애물 → 플레이어 방향의 수평 성분
+        Vector3 knockDir = transform.position - obstacle.transform.position;
+        knockDir.y = 0f;
+        if (knockDir == Vector3.zero) knockDir = -Vector3.forward; // 폴백
+        knockDir = knockDir.normalized;
+
+        var state = GameManager.Instance.CurrentState;
+
+        if (state == GameManager.GameState.Running)
+        {
+            // Running 중에는 Kinematic이라 직접 위치를 밀어줌
+            transform.position += knockDir * obstacleKnockback * Time.fixedDeltaTime * 10f;
+        }
+        else if (state == GameManager.GameState.Flying)
+        {
+            // Flying 중에는 Rigidbody에 힘을 가함
+            _rb.AddForce(knockDir * obstacleKnockback, ForceMode.Impulse);
         }
 
-        if (otherTag == "JumpRamp" && state == GameManager.GameState.Running)
+        // 히트 파티클 재생
+        if (hitParticle != null)
         {
-            Launch();
-            return;
+            hitParticle.transform.position = transform.position;
+            hitParticle.Play();
         }
 
-        // ★ 유예 시간 중에는 Ground 충돌 무시 (점프대 자체가 Ground로 판정되는 경우도 방지)
-        if (otherTag == "Ground" && state == GameManager.GameState.Flying)
-        {
-            if (_landingGraceTimer <= 0f)
-                Land();
-        }
+        Debug.Log($"[Player] 장애물 피격! 게이지: {GameManager.Instance.boostGauge:F1}  넉백방향: {knockDir}");
     }
 
     // ────────────────────────────────────────────────
@@ -199,10 +266,8 @@ public class PlayerController : MonoBehaviour
 
         _rb.isKinematic = false;
 
-        // ★ Running 구간에서 Transform.Translate로 달리던 속도를
-        //    Rigidbody 초기 velocity로 심어줌.
-        //    이게 없으면 물리 전환 시 앞으로 나가는 관성이 0이라
-        //    포물선이 아니라 수직으로 올라갔다가 바로 아래로 떨어짐.
+        // Running 구간에서 달리던 속도를 Rigidbody 초기값으로 심어줌
+        // → 포물선 궤적 보장 (이 값이 없으면 수직으로 올랐다가 바로 낙하)
         _rb.linearVelocity = Vector3.forward * baseSpeed;
 
         float rad = launchAngleDeg * Mathf.Deg2Rad;
@@ -230,8 +295,6 @@ public class PlayerController : MonoBehaviour
         _startPosZ = transform.position.z;
         _rb.linearDamping = airDrag;
         Physics.gravity = _originalGravity * flightGravityScale;
-
-        // ★ 유예 타이머 시작 — 이 시간 동안 착지 판정 전부 무시
         _landingGraceTimer = landingGracePeriod;
     }
 
@@ -256,9 +319,7 @@ public class PlayerController : MonoBehaviour
 
     private void CheckGroundFall()
     {
-        // ★ 유예 시간 중에는 Y=0 판정도 무시
         if (_landingGraceTimer > 0f) return;
-
         if (transform.position.y <= 0f) Land();
     }
 

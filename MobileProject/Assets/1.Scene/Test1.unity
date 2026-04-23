@@ -389,6 +389,10 @@ MonoBehaviour:
   flightGravityScale: 0.6
   restoreGravityOnLand: 1
   landingGracePeriod: 0.5
+  obstacleDamage: 15
+  obstacleKnockback: 6
+  obstacleCooldown: 0.5
+  hitParticle: {fileID: 0}
   boosterParticle: {fileID: 0}
 --- !u!54 &281598453
 Rigidbody:
@@ -990,6 +994,56 @@ CanvasRenderer:
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 503301414}
   m_CullTransparentMesh: 1
+--- !u!1 &553071234
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 553071236}
+  - component: {fileID: 553071235}
+  m_Layer: 0
+  m_Name: LevelManager
+  m_TagString: Untagged
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!114 &553071235
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 553071234}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 16d74e462ab1b6a4c8c67b4f864f2d3b, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::LevelManager
+  chunkPrefabs: []
+  jumpRampChunk: {fileID: 0}
+  maxChunks: 5
+  chunkLength: 30
+  preloadCount: 3
+  recycleDistance: 40
+--- !u!4 &553071236
+Transform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 553071234}
+  serializedVersion: 2
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: 14.88051, y: 26.16449, z: -102.38261}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children: []
+  m_Father: {fileID: 0}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
 --- !u!1 &663792909
 GameObject:
   m_ObjectHideFlags: 0
@@ -1833,3 +1887,4 @@ SceneRoots:
   - {fileID: 1599020467}
   - {fileID: 663792913}
   - {fileID: 792805622}
+  - {fileID: 553071236}
