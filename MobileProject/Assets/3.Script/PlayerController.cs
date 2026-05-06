@@ -8,73 +8,60 @@ public class PlayerController : MonoBehaviour
     // ────────────────────────────────────────────────
 
     [Header("=== Phase 1 : Running ===")]
-    [Tooltip("Z축 자동 전진 속도 (게이트 통과 시 절대 변하지 않음)")]
+    [Tooltip("Z축 자동 전진 속도")]
     public float baseSpeed = 10f;
 
-    [Tooltip("좌우 이동 속도")]
-    public float lateralSpeed = 8f;
+    [Header("3차선 스냅 이동")]
+    [Tooltip("좌 / 중 / 우 3개 차선 X 좌표 (DynamicLevelManager와 동일하게 맞출 것)")]
+    public float[] lanes = { -2.5f, 0f, 2.5f };
 
-    [Tooltip("도로 X축 이동 제한 범위 (±laneLimit)")]
-    public float laneLimit = 3.5f;
+    [Tooltip("차선 변경 시 Lerp 속도 (높을수록 빠르게 스냅)")]
+    public float laneChangeSpeed = 12f;
+
+    [Tooltip("모바일 스와이프 최소 인식 거리 (px) — 이보다 짧은 스와이프는 무시")]
+    public float swipeMinPixels = 50f;
 
     [Header("=== Phase 2 : Jumping ===")]
-    [Tooltip("발사 방향 각도 (degrees, 0=정면 90=수직)")]
     [Range(10f, 80f)]
     public float launchAngleDeg = 45f;
-
-    [Tooltip("부스터 게이지 1단위당 발사 힘 배율")]
     public float launchForceBase = 5f;
-
-    [Tooltip("boostGauge가 0일 때도 최소한 이 힘으로 발사 (테스트용)")]
     public float launchForceMin = 10f;
 
     [Header("=== Phase 3 : Flying ===")]
-    [Tooltip("화면 홀드 시 초당 소모되는 부스터 게이지량")]
     public float boostDrainPerSecond = 10f;
-
-    [Tooltip("화면 홀드 추가 추력 (Forward+Up 방향)")]
     public float thrustForce = 15f;
-
-    [Tooltip("비행 중 공기 저항 (인스펙터 조절 → 체공 시간 튜닝)")]
     public float airDrag = 1.5f;
-
-    [Tooltip("비행 중 중력 배율 (1 = 기본값, 0.5 = 절반)")]
     public float flightGravityScale = 0.6f;
-
-    [Tooltip("비행 종료 시 원래 중력으로 복원할지 여부")]
     public bool restoreGravityOnLand = true;
-
-    [Tooltip("발사 후 이 시간(초) 동안은 착지 판정을 무시 (즉시 GameOver 방지)")]
     public float landingGracePeriod = 0.5f;
 
-    [Header("=== Obstacle (장애물) ===")]
+    [Header("=== Obstacle ===")]
     [Tooltip("장애물 충돌 시 감소할 부스터 게이지량")]
-    public float obstacleDamage = 15f;
-
-    [Tooltip("장애물 충돌 시 뒤로 튕겨나는 넉백 힘")]
-    public float obstacleKnockback = 6f;
-
-    [Tooltip("같은 장애물에 연속 충돌 방지 쿨타임 (초)")]
-    public float obstacleCooldown = 0.5f;
-
-    [Tooltip("장애물 충돌 시 재생할 파티클 (없으면 무시)")]
+    public float obstacleDamage = 10f;
     public ParticleSystem hitParticle;
 
     [Header("=== VFX ===")]
-    [Tooltip("부스터 파티클 시스템 (차량 후방에 부착)")]
     public ParticleSystem boosterParticle;
 
     // ────────────────────────────────────────────────
-    //  Private
+    //  Private — 차선 이동
+    // ────────────────────────────────────────────────
+    private int _currentLaneIndex = 1;          // 시작: 가운데 차선
+    private float _targetX;                        // 목표 X 좌표 (Lerp 목적지)
+
+    // 스와이프 감지용
+    private Vector2 _touchStartPos;
+    private bool _swipeProcessed;                 // 한 터치당 한 번만 차선 변경
+
+    // ────────────────────────────────────────────────
+    //  Private — 물리 / 상태
     // ────────────────────────────────────────────────
     private Rigidbody _rb;
     private Vector3 _originalGravity;
     private float _originalDrag;
     private float _startPosZ;
-    private float _touchStartX;
     private bool _launched;
     private float _landingGraceTimer;
-    private float _obstacleHitTimer;   // 장애물 쿨타임 타이머
 
     // ────────────────────────────────────────────────
     //  Unity 생명주기
@@ -85,6 +72,12 @@ public class PlayerController : MonoBehaviour
         _rb.isKinematic = true;
         _originalGravity = Physics.gravity;
         _originalDrag = _rb.linearDamping;
+
+        // 시작 위치: 가운데 차선
+        _targetX = lanes[_currentLaneIndex];
+        Vector3 pos = transform.position;
+        pos.x = _targetX;
+        transform.position = pos;
     }
 
     private void Start()
@@ -103,18 +96,17 @@ public class PlayerController : MonoBehaviour
 
     private void Update()
     {
-        // 쿨타임 카운트다운
-        if (_obstacleHitTimer > 0f) _obstacleHitTimer -= Time.deltaTime;
+        if (_landingGraceTimer > 0f) _landingGraceTimer -= Time.deltaTime;
 
         switch (GameManager.Instance.CurrentState)
         {
             case GameManager.GameState.Running:
-                HandleRunningInput();
+                HandleLaneInput();
+                ApplyLaneSnap();
                 MoveForward();
                 break;
 
             case GameManager.GameState.Flying:
-                if (_landingGraceTimer > 0f) _landingGraceTimer -= Time.deltaTime;
                 HandleFlyingInput();
                 CheckGroundFall();
                 break;
@@ -122,55 +114,66 @@ public class PlayerController : MonoBehaviour
     }
 
     // ────────────────────────────────────────────────
-    //  Phase 1 : Running
+    //  Phase 1 : 전진
     // ────────────────────────────────────────────────
     private void MoveForward()
     {
         transform.Translate(Vector3.forward * baseSpeed * Time.deltaTime);
     }
 
-    private void HandleRunningInput()
+    // ────────────────────────────────────────────────
+    //  Phase 1 : 차선 입력 (PC 방향키 + 모바일 스와이프)
+    // ────────────────────────────────────────────────
+    private void HandleLaneInput()
     {
-        float inputX = 0f;
+        // ── PC: 방향키 ──
+        if (Input.GetKeyDown(KeyCode.LeftArrow) || Input.GetKeyDown(KeyCode.A)) ChangeLane(-1);
+        if (Input.GetKeyDown(KeyCode.RightArrow) || Input.GetKeyDown(KeyCode.D)) ChangeLane(+1);
 
-#if UNITY_EDITOR || UNITY_STANDALONE
-        if (Input.GetMouseButtonDown(0)) _touchStartX = Input.mousePosition.x;
-        if (Input.GetMouseButton(0))
-        {
-            float pixelDelta = Input.mousePosition.x - _touchStartX;
-            inputX = (pixelDelta / Screen.width) * lateralSpeed * laneLimit * 2f;
-            _touchStartX = Input.mousePosition.x;
-        }
-#else
+        // ── 모바일: 스와이프 ──
         if (Input.touchCount > 0)
         {
             Touch touch = Input.GetTouch(0);
-            if (touch.phase == TouchPhase.Began) _touchStartX = touch.position.x;
-            if (touch.phase == TouchPhase.Moved || touch.phase == TouchPhase.Stationary)
+
+            if (touch.phase == TouchPhase.Began)
             {
-                float pixelDelta = touch.position.x - _touchStartX;
-                inputX           = (pixelDelta / Screen.width) * lateralSpeed * laneLimit * 2f;
-                _touchStartX     = touch.position.x;
+                _touchStartPos = touch.position;
+                _swipeProcessed = false;
+            }
+
+            if (!_swipeProcessed && touch.phase == TouchPhase.Moved)
+            {
+                float deltaX = touch.position.x - _touchStartPos.x;
+
+                // 최소 인식 거리 미만이면 무시 (오작동 방지)
+                if (Mathf.Abs(deltaX) < swipeMinPixels) return;
+
+                ChangeLane(deltaX > 0 ? +1 : -1);
+                _swipeProcessed = true;   // 한 터치당 차선 변경 1회만
             }
         }
-#endif
+    }
+
+    /// <summary>차선 인덱스를 ±1 변경하고 목표 X를 갱신</summary>
+    private void ChangeLane(int direction)
+    {
+        _currentLaneIndex = Mathf.Clamp(_currentLaneIndex + direction, 0, lanes.Length - 1);
+        _targetX = lanes[_currentLaneIndex];
+    }
+
+    /// <summary>매 프레임 현재 X를 목표 X로 Lerp — 쫀득한 스냅 연출</summary>
+    private void ApplyLaneSnap()
+    {
         Vector3 pos = transform.position;
-        pos.x = Mathf.Clamp(pos.x + inputX, -laneLimit, laneLimit);
+        pos.x = Mathf.Lerp(pos.x, _targetX, laneChangeSpeed * Time.deltaTime);
         transform.position = pos;
     }
 
     // ────────────────────────────────────────────────
     //  충돌 감지 (Trigger + Collision 둘 다)
     // ────────────────────────────────────────────────
-    private void OnTriggerEnter(Collider other)
-    {
-        HandleContact(other.gameObject, other.tag);
-    }
-
-    private void OnCollisionEnter(Collision collision)
-    {
-        HandleContact(collision.gameObject, collision.gameObject.tag);
-    }
+    private void OnTriggerEnter(Collider other) => HandleContact(other.gameObject, other.tag);
+    private void OnCollisionEnter(Collision collision) => HandleContact(collision.gameObject, collision.gameObject.tag);
 
     private void HandleContact(GameObject other, string otherTag)
     {
@@ -183,7 +186,6 @@ public class PlayerController : MonoBehaviour
                 GateData gate = other.GetComponent<GateData>();
                 if (gate != null)
                     GameManager.Instance.ApplyGateFormula(gate.Operator, gate.Value);
-                // 청크 기반이므로 게이트는 풀 반환 없이 그냥 비활성화
                 other.SetActive(false);
                 break;
 
@@ -198,7 +200,6 @@ public class PlayerController : MonoBehaviour
                 break;
 
             case "Obstacle":
-                // Running / Flying 양쪽 모두 장애물 피격 처리
                 if (state == GameManager.GameState.GameOver) return;
                 HandleObstacleHit(other);
                 break;
@@ -208,50 +209,26 @@ public class PlayerController : MonoBehaviour
     // ────────────────────────────────────────────────
     //  장애물 피격
     // ────────────────────────────────────────────────
-
-    /// <summary>
-    /// 장애물 충돌 시 호출.
-    /// Running : 부스터 게이지 감소 + 뒤로 넉백
-    /// Flying  : 부스터 게이지 감소 + 반대 방향 튕김
-    /// </summary>
     private void HandleObstacleHit(GameObject obstacle)
     {
-        // 쿨타임 중이면 무시 (같은 장애물에 여러 프레임 연속 충돌 방지)
-        if (_obstacleHitTimer > 0f) return;
-        _obstacleHitTimer = obstacleCooldown;
-
-        // 게이지 감소
+        // ① 게이지 감소 (0 미만 방지)
         GameManager.Instance.boostGauge =
             Mathf.Max(0f, GameManager.Instance.boostGauge - obstacleDamage);
+
+        // ② UI 즉시 갱신
         UIManager.Instance?.RefreshBoostGaugeUI(GameManager.Instance.boostGauge);
 
-        // 넉백 방향: 장애물 → 플레이어 방향의 수평 성분
-        Vector3 knockDir = transform.position - obstacle.transform.position;
-        knockDir.y = 0f;
-        if (knockDir == Vector3.zero) knockDir = -Vector3.forward; // 폴백
-        knockDir = knockDir.normalized;
+        // ③ 장애물 즉시 비활성화 → 연속 데미지(억까) 완전 차단
+        obstacle.SetActive(false);
 
-        var state = GameManager.Instance.CurrentState;
-
-        if (state == GameManager.GameState.Running)
-        {
-            // Running 중에는 Kinematic이라 직접 위치를 밀어줌
-            transform.position += knockDir * obstacleKnockback * Time.fixedDeltaTime * 10f;
-        }
-        else if (state == GameManager.GameState.Flying)
-        {
-            // Flying 중에는 Rigidbody에 힘을 가함
-            _rb.AddForce(knockDir * obstacleKnockback, ForceMode.Impulse);
-        }
-
-        // 히트 파티클 재생
+        // ④ 히트 파티클
         if (hitParticle != null)
         {
             hitParticle.transform.position = transform.position;
             hitParticle.Play();
         }
 
-        Debug.Log($"[Player] 장애물 피격! 게이지: {GameManager.Instance.boostGauge:F1}  넉백방향: {knockDir}");
+        Debug.Log($"[Player] 장애물 피격 | 게이지 잔량: {GameManager.Instance.boostGauge:F1}");
     }
 
     // ────────────────────────────────────────────────
@@ -265,14 +242,11 @@ public class PlayerController : MonoBehaviour
         GameManager.Instance.ChangeState(GameManager.GameState.Jumping);
 
         _rb.isKinematic = false;
-
-        // Running 구간에서 달리던 속도를 Rigidbody 초기값으로 심어줌
-        // → 포물선 궤적 보장 (이 값이 없으면 수직으로 올랐다가 바로 낙하)
+        // 달리던 속도를 물리 초기값으로 이어줌 → 포물선 보장
         _rb.linearVelocity = Vector3.forward * baseSpeed;
 
         float rad = launchAngleDeg * Mathf.Deg2Rad;
         Vector3 dir = new Vector3(0f, Mathf.Sin(rad), Mathf.Cos(rad)).normalized;
-
         float forceMag = Mathf.Max(
             launchForceMin,
             GameManager.Instance.boostGauge
@@ -281,7 +255,7 @@ public class PlayerController : MonoBehaviour
         );
 
         _rb.AddForce(dir * forceMag, ForceMode.Impulse);
-        Debug.Log($"[Player] Launch! force={forceMag:F1}  boostGauge={GameManager.Instance.boostGauge:F1}");
+        Debug.Log($"[Player] Launch! force={forceMag:F1}  boost={GameManager.Instance.boostGauge:F1}");
 
         GameManager.Instance.ChangeState(GameManager.GameState.Flying);
         EnterFlyingMode();
@@ -307,14 +281,12 @@ public class PlayerController : MonoBehaviour
             bool hasBoost = GameManager.Instance.ConsumeBoost(boostDrainPerSecond * Time.deltaTime);
             if (hasBoost)
             {
-                Vector3 thrustDir = (Vector3.forward + Vector3.up).normalized;
-                _rb.AddForce(thrustDir * thrustForce * Time.deltaTime, ForceMode.Force);
-                if (boosterParticle != null && !boosterParticle.isPlaying)
-                    boosterParticle.Play();
+                _rb.AddForce((Vector3.forward + Vector3.up).normalized * thrustForce * Time.deltaTime, ForceMode.Force);
+                if (boosterParticle != null && !boosterParticle.isPlaying) boosterParticle.Play();
             }
-            else { StopBoosterParticle(); }
+            else StopBoosterParticle();
         }
-        else { StopBoosterParticle(); }
+        else StopBoosterParticle();
     }
 
     private void CheckGroundFall()
@@ -324,7 +296,7 @@ public class PlayerController : MonoBehaviour
     }
 
     // ────────────────────────────────────────────────
-    //  Land / GameOver
+    //  Land
     // ────────────────────────────────────────────────
     private void Land()
     {
@@ -336,13 +308,10 @@ public class PlayerController : MonoBehaviour
         _rb.linearDamping = _originalDrag;
         if (restoreGravityOnLand) Physics.gravity = _originalGravity;
 
-        float distance = transform.position.z - _startPosZ;
-        GameManager.Instance.TriggerGameOver(Mathf.Max(0f, distance));
+        GameManager.Instance.TriggerGameOver(
+            Mathf.Max(0f, transform.position.z - _startPosZ));
     }
 
-    // ────────────────────────────────────────────────
-    //  상태 변경 콜백
-    // ────────────────────────────────────────────────
     private void HandleStateChanged(GameManager.GameState newState)
     {
         if (newState == GameManager.GameState.GameOver)
@@ -354,7 +323,6 @@ public class PlayerController : MonoBehaviour
 
     private void StopBoosterParticle()
     {
-        if (boosterParticle != null && boosterParticle.isPlaying)
-            boosterParticle.Stop();
+        if (boosterParticle != null && boosterParticle.isPlaying) boosterParticle.Stop();
     }
 }
